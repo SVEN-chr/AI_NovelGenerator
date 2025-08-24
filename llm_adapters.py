@@ -108,25 +108,168 @@ class GeminiAdapter(BaseLLMAdapter):
         # gemini超时时间是毫秒
         self.timeout = timeout * 1000
 
-        self._client = genai.Client(api_key=self.api_key,http_options=types.HttpOptions(base_url=base_url,timeout=self.timeout))
+        # Configure the Gemini API
+        # Note: base_url is typically not used with standard Gemini API
+        # but we store it for potential future use or custom endpoints
+        self.base_url = base_url
+        genai.configure(api_key=self.api_key)
+        
+        # Configure safety settings to be less restrictive for creative writing
+        safety_settings = [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH", 
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+            }
+        ]
+        
+        self._client = genai.GenerativeModel(
+            self.model_name,
+            safety_settings=safety_settings
+        )
 
     def invoke(self, prompt: str) -> str:
-        try:
-            response = self._client.models.generate_content(
-                model = self.model_name,
-                contents = prompt,
-                config = types.GenerateContentConfig(
+        import time
+        import re
+        
+        max_retries = 3
+        base_delay = 5  # Base delay in seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # Create generation config
+                generation_config = genai.GenerationConfig(
                     max_output_tokens=self.max_tokens,
                     temperature=self.temperature,
-                ),
-            )
-            if response and response.text:
-                return response.text
-            else:
-                logging.warning("No text response from Gemini API.")
-                return ""
-        except Exception as e:
-            logging.error(f"Gemini API 调用失败: {e}")
+                )
+                
+                response = self._client.generate_content(
+                    prompt,
+                    generation_config=generation_config
+                )
+                break  # Success, exit retry loop
+                
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
+                    # Extract retry delay from error message if available
+                    retry_match = re.search(r'retry_delay.*?seconds:\s*(\d+)', error_str)
+                    if retry_match:
+                        delay = int(retry_match.group(1)) + 5  # Add 5 seconds buffer
+                    else:
+                        delay = base_delay * (2 ** attempt)  # Exponential backoff
+                    
+                    if attempt < max_retries - 1:
+                        logging.warning(f"Rate limit hit, retrying in {delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(delay)
+                        continue
+                    else:
+                        logging.error(f"Rate limit exceeded after {max_retries} attempts: {e}")
+                        return ""
+                else:
+                    # Non-rate-limit error, don't retry
+                    logging.error(f"Gemini API 调用失败: {e}")
+                    return ""
+        
+        # Better response validation
+        if response:
+            # Check if response was blocked by safety filters
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'finish_reason'):
+                    finish_reason = candidate.finish_reason
+                    if finish_reason == 1:  # STOP
+                        pass  # Normal completion
+                    elif finish_reason == 2:  # MAX_TOKENS
+                        logging.warning("Gemini response truncated due to max_tokens limit")
+                    elif finish_reason == 3:  # SAFETY
+                        logging.warning("Gemini response blocked by safety filters")
+                        return ""
+                    elif finish_reason == 4:  # RECITATION
+                        logging.warning("Gemini response blocked due to recitation concerns")
+                        return ""
+                    else:
+                        logging.warning(f"Gemini response finished with reason: {finish_reason}")
+            
+            # Try to get text content safely with detailed debugging
+            try:
+                # First try the direct text accessor
+                if hasattr(response, 'text'):
+                    text_content = response.text
+                    if text_content:
+                        return text_content
+                
+                # Debug response structure
+                logging.debug(f"Response object type: {type(response)}")
+                logging.debug(f"Response attributes: {dir(response)}")
+                
+                if hasattr(response, 'candidates') and response.candidates:
+                    candidate = response.candidates[0]
+                    logging.debug(f"Candidate type: {type(candidate)}")
+                    logging.debug(f"Candidate attributes: {dir(candidate)}")
+                    
+                    if hasattr(candidate, 'content') and candidate.content:
+                        content = candidate.content
+                        logging.debug(f"Content type: {type(content)}")
+                        logging.debug(f"Content attributes: {dir(content)}")
+                        
+                        if hasattr(content, 'parts') and content.parts:
+                            logging.debug(f"Number of parts: {len(content.parts)}")
+                            text_parts = []
+                            for i, part in enumerate(content.parts):
+                                logging.debug(f"Part {i} type: {type(part)}")
+                                logging.debug(f"Part {i} attributes: {dir(part)}")
+                                if hasattr(part, 'text') and part.text:
+                                    text_parts.append(part.text)
+                                    logging.debug(f"Part {i} text length: {len(part.text)}")
+                            
+                            if text_parts:
+                                result = ''.join(text_parts)
+                                logging.debug(f"Extracted text length: {len(result)}")
+                                return result
+                            else:
+                                logging.warning("No text found in any parts")
+                        else:
+                            logging.warning("No parts found in content")
+                    else:
+                        logging.warning("No content found in candidate")
+                else:
+                    logging.warning("No candidates found in response")
+                        
+            except Exception as text_ex:
+                logging.error(f"Error extracting text from Gemini response: {text_ex}")
+                # Try alternative approach - check if it's a generator response
+                try:
+                    if hasattr(response, '_result') and hasattr(response._result, 'candidates'):
+                        candidates = response._result.candidates
+                        if candidates and len(candidates) > 0:
+                            candidate = candidates[0]
+                            if hasattr(candidate, 'content') and candidate.content:
+                                if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                                    text_parts = []
+                                    for part in candidate.content.parts:
+                                        if hasattr(part, 'text') and part.text:
+                                            text_parts.append(part.text)
+                                    if text_parts:
+                                        return ''.join(text_parts)
+                except Exception as alt_ex:
+                    logging.error(f"Alternative text extraction also failed: {alt_ex}")
+            
+            logging.warning("No valid text content found in Gemini API response")
+            return ""
+        else:
+            logging.warning("No response from Gemini API")
             return ""
 
 class AzureOpenAIAdapter(BaseLLMAdapter):

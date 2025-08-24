@@ -146,11 +146,26 @@ def split_text_for_vectorstore(chapter_text: str, max_length: int = 500, similar
     if not chapter_text.strip():
         return []
     
-    nltk.download('punkt', quiet=True)
-    nltk.download('punkt_tab', quiet=True)
-    sentences = nltk.sent_tokenize(chapter_text)
-    if not sentences:
-        return []
+    # Try to use NLTK for sentence tokenization with fallback
+    try:
+        try:
+            nltk.download('punkt', quiet=True)
+            nltk.download('punkt_tab', quiet=True)
+        except:
+            # Download might fail due to SSL issues, continue anyway
+            pass
+        
+        sentences = nltk.sent_tokenize(chapter_text)
+        if not sentences:
+            raise Exception("NLTK tokenization failed or returned empty")
+    except Exception as e:
+        # Fallback to simple sentence splitting when NLTK fails
+        import re
+        sentences = re.split(r'[.!?]+\s+', chapter_text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        if not sentences:
+            # Last resort: split by paragraphs
+            sentences = [p.strip() for p in chapter_text.split('\n') if p.strip()]
     
     # 直接按长度分段,不做相似度合并
     final_segments = []
