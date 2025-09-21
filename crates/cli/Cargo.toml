@@ -10,4 +10,5 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 novel-core = { path = "../core" }
+novel-adapters = { path = "../adapters" }
 thiserror = { workspace = true }
