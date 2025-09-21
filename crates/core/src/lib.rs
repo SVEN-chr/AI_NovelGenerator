@@ -1,7 +1,12 @@
+pub mod architecture;
 pub mod config;
 pub mod logging;
 pub mod prompts;
 
+pub use architecture::{
+    ArchitectureError, ArchitectureRequest, ArchitectureService, ArchitectureSnapshot,
+    ArchitectureStage, ArchitectureState, LanguageModel, LanguageModelError,
+};
 pub use config::{
     Config, ConfigError, ConfigStore, EmbeddingConfig, LlmConfig, NovelConfig, PromptConfig,
     RecentUsage,
