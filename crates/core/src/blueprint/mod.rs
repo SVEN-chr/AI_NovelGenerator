@@ -212,9 +212,9 @@ impl<'a> ChapterBlueprintService<'a> {
                     .format_with(
                         BlueprintPromptKind::Initial.prompt_key(),
                         [
-                            ("novel_architecture", architecture.as_str()),
+                            ("novel_architecture", architecture.clone()),
                             ("number_of_chapters", request.number_of_chapters.to_string()),
-                            ("user_guidance", request.user_guidance.trim()),
+                            ("user_guidance", request.user_guidance.trim().to_string()),
                         ],
                     )
                     .map_err(|source| BlueprintError::Prompt {
@@ -255,12 +255,12 @@ impl<'a> ChapterBlueprintService<'a> {
                             }
                             .prompt_key(),
                             [
-                                ("novel_architecture", architecture.as_str()),
-                                ("chapter_list", limited.as_str()),
+                                ("novel_architecture", architecture.clone()),
+                                ("chapter_list", limited),
                                 ("number_of_chapters", request.number_of_chapters.to_string()),
                                 ("n", current_start.to_string()),
                                 ("m", current_end.to_string()),
-                                ("user_guidance", request.user_guidance.trim()),
+                                ("user_guidance", request.user_guidance.trim().to_string()),
                             ],
                         )
                         .map_err(|source| BlueprintError::Prompt {
@@ -340,12 +340,12 @@ impl<'a> ChapterBlueprintService<'a> {
                         }
                         .prompt_key(),
                         [
-                            ("novel_architecture", architecture.as_str()),
-                            ("chapter_list", limited.as_str()),
+                            ("novel_architecture", architecture.clone()),
+                            ("chapter_list", limited),
                             ("number_of_chapters", request.number_of_chapters.to_string()),
                             ("n", current_start.to_string()),
                             ("m", current_end.to_string()),
-                            ("user_guidance", request.user_guidance.trim()),
+                            ("user_guidance", request.user_guidance.trim().to_string()),
                         ],
                     )
                     .map_err(|source| BlueprintError::Prompt {
@@ -548,9 +548,23 @@ pub fn limit_chapter_blueprint(text: &str, limit: usize) -> String {
         return String::new();
     }
 
-    let segments: Vec<String> = chapter_segment_regex()
-        .captures_iter(trimmed)
-        .filter_map(|caps| caps.get(1).map(|m| m.as_str().trim().to_string()))
+    let mut boundaries: Vec<usize> = finder_regex()
+        .find_iter(trimmed)
+        .map(|m| m.start())
+        .collect();
+
+    if boundaries.is_empty() {
+        return trimmed.to_string();
+    }
+
+    boundaries.push(trimmed.len());
+    let segments: Vec<String> = boundaries
+        .windows(2)
+        .map(|window| {
+            let start = window[0];
+            let end = window[1];
+            trimmed[start..end].trim().to_string()
+        })
         .collect();
 
     if segments.len() <= limit {
@@ -671,14 +685,6 @@ fn find_max_chapter_number(text: &str) -> Option<u32> {
         .max()
 }
 
-fn chapter_segment_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r"(?s)(第\s*\d+\s*章.*?)(?=第\s*\d+\s*章|$)")
-            .expect("invalid chapter segment regex")
-    })
-}
-
 fn block_split_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| Regex::new(r"\n\s*\n").expect("invalid blueprint splitter"))
@@ -740,30 +746,31 @@ mod tests {
     use crate::logging::VecLogSink;
     use crate::prompts::PromptRegistry;
     use std::collections::VecDeque;
+    use std::sync::Mutex;
     use tempfile::TempDir;
 
     struct MockLanguageModel {
-        responses: RefCell<VecDeque<String>>,
-        prompts: RefCell<Vec<String>>,
+        responses: Mutex<VecDeque<String>>,
+        prompts: Mutex<Vec<String>>,
     }
 
     impl MockLanguageModel {
         fn new(responses: Vec<&str>) -> Self {
             Self {
-                responses: RefCell::new(responses.into_iter().map(|s| s.to_string()).collect()),
-                prompts: RefCell::new(Vec::new()),
+                responses: Mutex::new(responses.into_iter().map(|s| s.to_string()).collect()),
+                prompts: Mutex::new(Vec::new()),
             }
         }
 
         fn prompts(&self) -> Vec<String> {
-            self.prompts.borrow().clone()
+            self.prompts.lock().unwrap().clone()
         }
     }
 
     impl LanguageModel for MockLanguageModel {
         fn invoke(&self, prompt: &str) -> Result<String, LanguageModelError> {
-            self.prompts.borrow_mut().push(prompt.to_string());
-            self.responses.borrow_mut().pop_front().ok_or_else(|| {
+            self.prompts.lock().unwrap().push(prompt.to_string());
+            self.responses.lock().unwrap().pop_front().ok_or_else(|| {
                 LanguageModelError::new(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "no more mock responses",
