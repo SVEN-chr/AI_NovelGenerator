@@ -1,0 +1,13 @@
+[package]
+name = "novelctl"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "novelctl"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+novel-core = { path = "../core" }
+thiserror = { workspace = true }

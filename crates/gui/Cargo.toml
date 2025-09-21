@@ -1,0 +1,11 @@
+[package]
+name = "novel-gui"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "novel_gui"
+path = "src/lib.rs"
+
+[dependencies]
+novel-core = { path = "../core" }
