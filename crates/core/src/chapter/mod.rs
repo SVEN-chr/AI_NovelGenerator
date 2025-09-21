@@ -10,10 +10,12 @@ use crate::blueprint::{ChapterBlueprint, ChapterBlueprintEntry};
 use crate::logging::{LogLevel, LogRecord, LogSink};
 use crate::prompts::{PromptError, PromptRegistry};
 
+pub mod finalization;
 mod keywords;
 mod knowledge;
 mod prompt;
 mod summary;
+mod vector_store;
 
 use keywords::generate_keyword_groups;
 use knowledge::{apply_content_rules, filter_knowledge_contexts};

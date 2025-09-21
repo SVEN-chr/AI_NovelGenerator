@@ -7,15 +7,11 @@ use reqwest::header::{self, HeaderMap, HeaderValue};
 use serde::Deserialize;
 
 use novel_core::config::{Config, EmbeddingConfig};
+use novel_core::embedding::{EmbeddingModel, EmbeddingModelError};
 
 use crate::base_url::ensure_openai_base_url_has_v1;
 use crate::error::AdapterError;
 use crate::retry::{call_with_retry, RetryConfig};
-
-pub trait EmbeddingModel: Send + Sync {
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AdapterError>;
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>, AdapterError>;
-}
 
 pub fn create_embedding_adapter(
     config: &Config,
@@ -136,7 +132,7 @@ impl OpenAiEmbeddingAdapter {
 }
 
 impl EmbeddingModel for OpenAiEmbeddingAdapter {
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AdapterError> {
+    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingModelError> {
         call_with_retry(
             || {
                 let inputs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
@@ -144,17 +140,19 @@ impl EmbeddingModel for OpenAiEmbeddingAdapter {
             },
             &self.retry,
         )
+        .map_err(EmbeddingModelError::new)
     }
 
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>, AdapterError> {
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingModelError> {
         let vectors = call_with_retry(
             || self.embed(serde_json::Value::from(vec![text])),
             &self.retry,
-        )?;
-        vectors
-            .into_iter()
-            .next()
-            .ok_or(AdapterError::EmptyResponse)
+        )
+        .map_err(EmbeddingModelError::new)?;
+        match vectors.into_iter().next() {
+            Some(vector) => Ok(vector),
+            None => Err(EmbeddingModelError::new(AdapterError::EmptyResponse)),
+        }
     }
 }
 
@@ -232,7 +230,7 @@ impl AzureOpenAiEmbeddingAdapter {
 }
 
 impl EmbeddingModel for AzureOpenAiEmbeddingAdapter {
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AdapterError> {
+    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingModelError> {
         call_with_retry(
             || {
                 let inputs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
@@ -240,17 +238,19 @@ impl EmbeddingModel for AzureOpenAiEmbeddingAdapter {
             },
             &self.retry,
         )
+        .map_err(EmbeddingModelError::new)
     }
 
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>, AdapterError> {
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingModelError> {
         let vectors = call_with_retry(
             || self.embed(serde_json::Value::from(vec![text])),
             &self.retry,
-        )?;
-        vectors
-            .into_iter()
-            .next()
-            .ok_or(AdapterError::EmptyResponse)
+        )
+        .map_err(EmbeddingModelError::new)?;
+        match vectors.into_iter().next() {
+            Some(vector) => Ok(vector),
+            None => Err(EmbeddingModelError::new(AdapterError::EmptyResponse)),
+        }
     }
 }
 
@@ -309,17 +309,18 @@ impl OllamaEmbeddingAdapter {
 }
 
 impl EmbeddingModel for OllamaEmbeddingAdapter {
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AdapterError> {
+    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingModelError> {
         let mut embeddings = Vec::with_capacity(texts.len());
         for text in texts {
-            let vector = call_with_retry(|| self.embed_once(text), &self.retry)?;
+            let vector = call_with_retry(|| self.embed_once(text), &self.retry)
+                .map_err(EmbeddingModelError::new)?;
             embeddings.push(vector);
         }
         Ok(embeddings)
     }
 
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>, AdapterError> {
-        call_with_retry(|| self.embed_once(text), &self.retry)
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingModelError> {
+        call_with_retry(|| self.embed_once(text), &self.retry).map_err(EmbeddingModelError::new)
     }
 }
 
@@ -385,17 +386,18 @@ impl GeminiEmbeddingAdapter {
 }
 
 impl EmbeddingModel for GeminiEmbeddingAdapter {
-    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, AdapterError> {
+    fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingModelError> {
         let mut embeddings = Vec::with_capacity(texts.len());
         for text in texts {
-            let vector = call_with_retry(|| self.embed_once(text), &self.retry)?;
+            let vector = call_with_retry(|| self.embed_once(text), &self.retry)
+                .map_err(EmbeddingModelError::new)?;
             embeddings.push(vector);
         }
         Ok(embeddings)
     }
 
-    fn embed_query(&self, text: &str) -> Result<Vec<f32>, AdapterError> {
-        call_with_retry(|| self.embed_once(text), &self.retry)
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingModelError> {
+        call_with_retry(|| self.embed_once(text), &self.retry).map_err(EmbeddingModelError::new)
     }
 }
 
