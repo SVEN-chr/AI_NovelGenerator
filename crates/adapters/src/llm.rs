@@ -244,7 +244,7 @@ impl OpenAiLikeAdapter {
 
 impl LanguageModel for OpenAiLikeAdapter {
     fn invoke(&self, prompt: &str) -> Result<String, LanguageModelError> {
-        call_with_retry(|| self.invoke_once(prompt), &self.retry).map_err(Into::into)
+        call_with_retry(|| self.invoke_once(prompt), &self.retry).map_err(LanguageModelError::new)
     }
 }
 
@@ -344,7 +344,7 @@ impl AzureOpenAiAdapter {
 
 impl LanguageModel for AzureOpenAiAdapter {
     fn invoke(&self, prompt: &str) -> Result<String, LanguageModelError> {
-        call_with_retry(|| self.invoke_once(prompt), &self.retry).map_err(Into::into)
+        call_with_retry(|| self.invoke_once(prompt), &self.retry).map_err(LanguageModelError::new)
     }
 }
 
@@ -451,7 +451,7 @@ impl AzureAiAdapter {
 
 impl LanguageModel for AzureAiAdapter {
     fn invoke(&self, prompt: &str) -> Result<String, LanguageModelError> {
-        call_with_retry(|| self.invoke_once(prompt), &self.retry).map_err(Into::into)
+        call_with_retry(|| self.invoke_once(prompt), &self.retry).map_err(LanguageModelError::new)
     }
 }
 
@@ -578,13 +578,13 @@ impl LanguageModel for GeminiAdapter {
                             continue;
                         }
                     }
-                    return Err(LanguageModelError::from(err));
+                    return Err(LanguageModelError::new(err));
                 }
             }
         }
 
         let err = last_error.unwrap_or(AdapterError::EmptyResponse);
-        Err(LanguageModelError::from(AdapterError::retry_exhausted(
+        Err(LanguageModelError::new(AdapterError::retry_exhausted(
             self.retry.max_retries,
             err,
         )))

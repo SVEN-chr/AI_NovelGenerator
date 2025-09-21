@@ -1,5 +1,6 @@
 pub mod architecture;
 pub mod blueprint;
+pub mod chapter;
 pub mod config;
 pub mod logging;
 pub mod prompts;
@@ -11,6 +12,10 @@ pub use architecture::{
 pub use blueprint::{
     BlueprintError, ChapterBlueprint, ChapterBlueprintEntry, ChapterBlueprintRequest,
     ChapterBlueprintService, BLUEPRINT_FILE_NAME,
+};
+pub use chapter::{
+    ChapterDraft, ChapterError, ChapterPrompt, ChapterPromptRequest, ChapterService, ChapterStage,
+    KnowledgeBase, KnowledgeBaseError,
 };
 pub use config::{
     Config, ConfigError, ConfigStore, EmbeddingConfig, LlmConfig, NovelConfig, PromptConfig,

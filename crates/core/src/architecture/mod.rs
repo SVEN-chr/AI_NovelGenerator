@@ -35,15 +35,6 @@ impl LanguageModelError {
     }
 }
 
-impl<E> From<E> for LanguageModelError
-where
-    E: StdError + Send + Sync + 'static,
-{
-    fn from(error: E) -> Self {
-        Self::new(error)
-    }
-}
-
 impl fmt::Display for LanguageModelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.inner)
@@ -409,11 +400,11 @@ impl<'a> ArchitectureService<'a> {
             .format_with(
                 "core_seed",
                 [
-                    ("topic", request.topic.trim()),
-                    ("genre", request.genre.trim()),
+                    ("topic", request.topic.trim().to_string()),
+                    ("genre", request.genre.trim().to_string()),
                     ("number_of_chapters", request.number_of_chapters.to_string()),
                     ("word_number", request.word_number.to_string()),
-                    ("user_guidance", request.user_guidance.trim()),
+                    ("user_guidance", request.user_guidance.trim().to_string()),
                 ],
             )
             .map_err(|source| ArchitectureError::Prompt {
@@ -458,8 +449,11 @@ impl<'a> ArchitectureService<'a> {
             .format_with(
                 "character_dynamics",
                 [
-                    ("core_seed", state.core_seed().unwrap_or_default().trim()),
-                    ("user_guidance", request.user_guidance.trim()),
+                    (
+                        "core_seed",
+                        state.core_seed().unwrap_or_default().trim().to_string(),
+                    ),
+                    ("user_guidance", request.user_guidance.trim().to_string()),
                 ],
             )
             .map_err(|source| ArchitectureError::Prompt {
@@ -506,7 +500,11 @@ impl<'a> ArchitectureService<'a> {
                 "create_character_state",
                 [(
                     "character_dynamics",
-                    state.character_dynamics().unwrap_or_default().trim(),
+                    state
+                        .character_dynamics()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
                 )],
             )
             .map_err(|source| ArchitectureError::Prompt {
@@ -564,8 +562,11 @@ impl<'a> ArchitectureService<'a> {
             .format_with(
                 "world_building",
                 [
-                    ("core_seed", state.core_seed().unwrap_or_default().trim()),
-                    ("user_guidance", request.user_guidance.trim()),
+                    (
+                        "core_seed",
+                        state.core_seed().unwrap_or_default().trim().to_string(),
+                    ),
+                    ("user_guidance", request.user_guidance.trim().to_string()),
                 ],
             )
             .map_err(|source| ArchitectureError::Prompt {
@@ -610,16 +611,27 @@ impl<'a> ArchitectureService<'a> {
             .format_with(
                 "plot_architecture",
                 [
-                    ("core_seed", state.core_seed().unwrap_or_default().trim()),
+                    (
+                        "core_seed",
+                        state.core_seed().unwrap_or_default().trim().to_string(),
+                    ),
                     (
                         "character_dynamics",
-                        state.character_dynamics().unwrap_or_default().trim(),
+                        state
+                            .character_dynamics()
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string(),
                     ),
                     (
                         "world_building",
-                        state.world_building().unwrap_or_default().trim(),
+                        state
+                            .world_building()
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string(),
                     ),
-                    ("user_guidance", request.user_guidance.trim()),
+                    ("user_guidance", request.user_guidance.trim().to_string()),
                 ],
             )
             .map_err(|source| ArchitectureError::Prompt {
