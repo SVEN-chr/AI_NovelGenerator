@@ -1,0 +1,23 @@
+[package]
+name = "novel-ui"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "novel_ui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "novel-ui"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.27", default-features = false, features = ["glow"] }
+egui = "0.27"
+tokio = { version = "1.37", features = ["rt-multi-thread", "macros"] }
+novel-core = { path = "../core" }
+novel-adapters = { path = "../adapters" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rfd = "0.14"
