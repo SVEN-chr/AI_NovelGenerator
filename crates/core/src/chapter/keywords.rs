@@ -4,7 +4,7 @@ use crate::prompts::{PromptArguments, PromptRegistry};
 
 use super::{ChapterError, ChapterPromptRequest, ChapterStage};
 
-pub fn generate_keyword_groups<M: LanguageModel>(
+pub fn generate_keyword_groups<M: LanguageModel + ?Sized>(
     model: &M,
     prompts: &PromptRegistry,
     chapter: &ChapterBlueprintEntry,

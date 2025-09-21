@@ -167,7 +167,7 @@ impl<'a> ChapterBlueprintService<'a> {
         self
     }
 
-    pub fn generate<M: LanguageModel>(
+    pub fn generate<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
         output_dir: impl AsRef<Path>,
@@ -468,7 +468,7 @@ impl<'a> ChapterBlueprintService<'a> {
         })
     }
 
-    fn invoke_with_cleaning<M: LanguageModel>(
+    fn invoke_with_cleaning<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
         kind: BlueprintPromptKind,

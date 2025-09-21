@@ -7,7 +7,7 @@ use crate::text_editor::TextEditorState;
 use novel_core::config::{
     Config, ConfigError, ConfigStore, EmbeddingConfig, LlmConfig, NovelConfig,
 };
-use novel_core::logging::{LogLevel, LogRecord};
+use novel_core::logging::LogRecord;
 use std::collections::VecDeque;
 use std::fs;
 use std::io;
@@ -175,12 +175,12 @@ impl AppState {
     }
 
     pub fn select_llm_profile(&mut self, name: Option<String>) {
-        let store = self.config_store();
+        let store = &self.config_store;
         self.config_panel.select_llm(name, store);
     }
 
     pub fn select_embedding_profile(&mut self, name: Option<String>) {
-        let store = self.config_store();
+        let store = &self.config_store;
         self.config_panel.select_embedding(name, store);
     }
 
@@ -702,8 +702,10 @@ impl NovelParametersState {
     }
 
     pub fn apply_to_store(&self, config: &mut Config) -> Result<(), ValidationError> {
-        let num_chapters = self.parse_num_chapters()?;
-        let word_number = self.parse_word_number()?;
+        let num_chapters = self
+            .parse_num_chapters()
+            .map_err(ValidationError::message)?;
+        let word_number = self.parse_word_number().map_err(ValidationError::message)?;
         config.novel = NovelConfig {
             topic: self.topic.trim().to_string(),
             genre: self.genre.trim().to_string(),

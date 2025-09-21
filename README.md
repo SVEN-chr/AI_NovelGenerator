@@ -32,18 +32,114 @@
 ---
 
 ## 📑 目录导航
-1. [环境准备](#-环境准备)  
-2. [项目架构](#-项目架构)  
-3. [配置指南](#⚙️-配置指南)  
-4. [运行说明](#🚀-运行说明)  
-5. [使用教程](#📘-使用教程)  
-6. [疑难解答](#❓-疑难解答)  
+1. [Rust CLI 快速上手](#-rust-cli-快速上手)
+2. [环境准备](#-环境准备)
+3. [项目架构](#-项目架构)
+4. [配置指南](#⚙️-配置指南)
+5. [运行说明](#🚀-运行说明)
+6. [使用教程](#📘-使用教程)
+7. [疑难解答](#❓-疑难解答)
 
 ---
 
+## 🦀 Rust CLI 快速上手
+Rust 版命令行工具 `novelctl` 复刻了原有 GUI 的「架构 ➜ 蓝图 ➜ 章节 ➜ 定稿 ➜ 知识导入」流程，更适合脚本化和自动化场景。
+
+### 安装 Rust 工具链
+- 建议使用 [rustup](https://www.rust-lang.org/zh-CN/tools/install) 安装稳定版工具链：
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  rustup default stable
+  ```
+- 安装完成后确认 `cargo --version` 输出无误即可。
+
+### 构建与运行 novelctl
+```bash
+cd AI_NovelGenerator
+cargo build --release -p novelctl      # 生成 release 版 CLI（位于 target/release/novelctl）
+cargo run -p novelctl -- --help        # 查看完整命令说明
+```
+首次执行可直接使用 `cargo run -p novelctl -- <subcommand>`，后续可将 `target/release/novelctl` 加入 `PATH` 以便全局调用。
+
+### 配置文件复用
+`novelctl` 直接读取根目录的 `config.json`，字段与 Python GUI 版本保持一致（见下文配置指南）。确保以下信息已填充：
+- `llm_profiles` / `embedding_profiles`：命名的模型配置，可通过 `--llm-interface` 或 `--embedding-interface` 选择。
+- `novel`：包含 `topic`、`genre`、`num_chapters`、`word_number`、`filepath` 等基础参数。
+- `prompts.custom_directories`：可选自定义提示词目录，与 GUI 共用同一套模板。
+
+### 命令速查
+```bash
+# 测试模型连通性
+novelctl config test-llm --interface openai
+novelctl config test-embedding --interface default
+
+# 生成/续跑世界观架构（Step1）
+novelctl architecture generate \
+  --llm-interface openai \
+  --guidance "更突出主角成长" \
+  --max-retries 4
+
+# 生成章节蓝图（Step2）
+novelctl blueprint generate \
+  --llm-interface openai \
+  --guidance "收束三幕式节奏" \
+  --max-tokens 4096
+
+# 生成章节草稿（Step3）
+novelctl chapter draft \
+  --id 1 \
+  --llm-interface openai \
+  --embedding-interface default \
+  --guidance "突出反派伏笔" \
+  --retrieval-k 4 \
+  --history 3
+
+# 定稿章节并写入摘要/角色状态/向量库（Step4）
+novelctl chapter finalize --id 1 --llm-interface openai --embedding-interface default
+
+# 导入知识库到向量数据库（Step5）
+novelctl knowledge import \
+  --file docs/lore.md \
+  --embedding-interface default \
+  --vector-url http://localhost:6333 \
+  --collection novel_collection
+```
+所有子命令均支持 `--config <path>` 指定配置文件，默认为仓库根目录的 `config.json`。
+
+### 自动化脚本
+仓库根目录新增 `Justfile`，可一键执行常见任务：
+```bash
+just fmt       # cargo fmt --all
+just clippy    # cargo clippy --workspace --all-targets -- -D warnings
+just test      # cargo test --workspace
+just ci        # 依次执行 fmt + clippy + test
+just package   # cargo build --release -p novelctl
+```
+如未安装 `just`，可通过 `cargo install just` 获取。
+
+### 测试与回归
+- `cargo test --workspace`：执行包含 `full_generation_pipeline_produces_expected_artifacts` 在内的集成测试，使用 mock LLM/Embedding 模拟从架构到定稿的完整链路，确保关键业务流程回归稳定。
+- 如需只运行核心模块测试，可使用 `cargo test -p novel-core`。
+
+### 打包与发布
+- `just package` 或 `cargo build --release -p novelctl` 即可产出跨平台可执行文件。
+- 可将 `target/release/novelctl` 压缩发布，或结合下方的发布方案生成安装包。
+
+### 跨平台发布方案评估
+| 平台 | 推荐方案 | 说明 |
+|------|----------|------|
+| Windows | [`cargo-wix`](https://github.com/volks73/cargo-wix) / [`cargo-bundle`](https://github.com/burtonageo/cargo-bundle) | 生成 MSI 安装包或携带图标的独立 EXE，支持在 CI 中自动签名。|
+| macOS | `cargo-bundle`（生成 `.app` + `.dmg`） | 可结合 `codesign` 与 `notarytool` 完成签名与公证，满足 Gatekeeper 要求。|
+| Linux | [`cargo-deb`](https://github.com/mmstick/cargo-deb) / [`cargo-rpm`](https://github.com/RustRPM/cargo-rpm) | 产出 `.deb` 或 `.rpm` 包，便于系统级安装与升级。|
+| 图形界面扩展 | [Tauri](https://tauri.app/) + `cargo tauri build` | 若后续计划统一 GUI 与 CLI，可复用 Rust 核心逻辑，同时打包 Windows/macOS/Linux 应用。|
+
+上述工具均可无缝接入现有 `Justfile`，形成「构建 ➜ 测试 ➜ 打包 ➜ 发布」的一键流程。
+
 ## 🛠 环境准备
 确保满足以下运行条件：
-- **Python 3.9+** 运行环境（推荐3.10-3.12之间）
+- **Rust 1.75+** 工具链与 `cargo`（用于 `novelctl` CLI）
+- **just**（可选，用于执行自动化脚本）
+- **Python 3.9+** 运行环境（推荐3.10-3.12之间，用于原 GUI）
 - **pip** 包管理工具
 - 有效API密钥：
   - 云端服务：OpenAI / DeepSeek 等
@@ -53,35 +149,36 @@
 
 
 ## 📥 安装说明
-1. **下载项目**  
-   - 通过 [GitHub](https://github.com) 下载项目 ZIP 文件，或使用以下命令克隆本项目：
-     ```bash
-     git clone https://github.com/YILING0013/AI_NovelGenerator
-     ```
 
-2. **安装编译工具（可选）**  
-   - 如果对某些包无法正常安装，访问 [Visual Studio Build Tools](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/) 下载并安装C++编译工具，用于构建部分模块包；
-   - 安装时，默认只包含 MSBuild 工具，需手动勾选左上角列表栏中的 **C++ 桌面开发** 选项。
+### Rust CLI（novelctl）
+1. **获取项目源码**
+   ```bash
+   git clone https://github.com/YILING0013/AI_NovelGenerator
+   cd AI_NovelGenerator
+   ```
+2. **构建 CLI**
+   ```bash
+   cargo build --release -p novelctl
+   ```
+   生成的二进制位于 `target/release/novelctl`。
+3. **（可选）安装 just**
+   ```bash
+   cargo install just
+   ```
 
-3. **安装依赖并运行**  
-   - 打开终端，进入项目源文件目录：
-     ```bash
-     cd AI_NovelGenerator
-     ```
-   - 安装项目依赖：
-     ```bash
-     pip install -r requirements.txt
-     ```
-   - 安装完成后，运行主程序：
-     ```bash
-     python main.py
-     ```
-
->如果缺失部分依赖，后续**手动执行**
->```bash
->pip install XXX
->```
->进行安装即可
+### Python GUI（原版界面）
+1. **下载项目**
+   - 通过 [GitHub](https://github.com) 下载项目 ZIP 文件，或使用上方命令克隆仓库。
+2. **安装编译工具（可选）**
+   - 如果对某些包无法正常安装，访问 [Visual Studio Build Tools](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/) 下载并安装 C++ 编译工具，用于构建部分模块包；
+   - 安装时需在左上角勾选 **C++ 桌面开发** 组件。
+3. **安装依赖并运行**
+   ```bash
+   cd AI_NovelGenerator
+   pip install -r requirements.txt
+   python main.py
+   ```
+   若出现缺失依赖，可根据提示手动执行 `pip install <package>` 完成补齐。
 
 ## 🗂 项目架构
 ```

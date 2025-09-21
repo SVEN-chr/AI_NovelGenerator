@@ -7,7 +7,7 @@ use novel_adapters::{
     create_embedding_adapter, create_llm_adapter, import_knowledge_file, load_vector_store,
     update_vector_store, AdapterError, VectorStoreConfig,
 };
-use novel_core::architecture::{ArchitectureRequest, ArchitectureService};
+use novel_core::architecture::{ArchitectureError, ArchitectureRequest, ArchitectureService};
 use novel_core::blueprint::{
     ChapterBlueprint, ChapterBlueprintRequest, ChapterBlueprintService, BLUEPRINT_FILE_NAME,
 };
@@ -217,6 +217,8 @@ pub enum TaskError {
     Adapter(#[from] AdapterError),
     #[error("提示词错误: {0}")]
     Prompt(#[from] PromptError),
+    #[error("架构生成错误: {0}")]
+    Architecture(#[from] ArchitectureError),
     #[error("蓝图生成错误: {0}")]
     Blueprint(#[from] novel_core::blueprint::BlueprintError),
     #[error("章节处理错误: {0}")]
@@ -235,7 +237,7 @@ pub enum TaskError {
     Join(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum TaskEvent {
     Log(LogRecord),
     TaskStarted(TaskKind),
@@ -483,16 +485,17 @@ fn run_build_chapter_prompt(
     let prompts = PromptRegistry::from_prompt_config(&store.config().prompts)?;
     let service = ChapterService::new(&prompts, &sink);
     let adapter = create_llm_adapter(store.config(), &selected_llm)?;
-    let embedding = if let Some(name) = &selected_embedding {
-        sink.emit(LogRecord::new(
-            LogLevel::Info,
-            format!("使用 Embedding 接口：{name}"),
-        ));
-        let adapter = create_embedding_adapter(store.config(), name)?;
-        Some((name.clone(), Arc::from(adapter)))
-    } else {
-        None
-    };
+    let embedding: Option<(String, Arc<dyn novel_core::embedding::EmbeddingModel>)> =
+        if let Some(name) = &selected_embedding {
+            sink.emit(LogRecord::new(
+                LogLevel::Info,
+                format!("使用 Embedding 接口：{name}"),
+            ));
+            let adapter = create_embedding_adapter(store.config(), name)?;
+            Some((name.clone(), Arc::from(adapter)))
+        } else {
+            None
+        };
     let knowledge = if let Some((_, arc)) = &embedding {
         load_vector_store(&sink, Arc::clone(arc), &command.output_dir)?
     } else {
@@ -543,16 +546,17 @@ fn run_generate_chapter_draft(
     let prompts = PromptRegistry::from_prompt_config(&store.config().prompts)?;
     let service = ChapterService::new(&prompts, &sink);
     let adapter = create_llm_adapter(store.config(), &selected_llm)?;
-    let embedding = if let Some(name) = &selected_embedding {
-        sink.emit(LogRecord::new(
-            LogLevel::Info,
-            format!("使用 Embedding 接口：{name}"),
-        ));
-        let adapter = create_embedding_adapter(store.config(), name)?;
-        Some((name.clone(), Arc::from(adapter)))
-    } else {
-        None
-    };
+    let embedding: Option<(String, Arc<dyn novel_core::embedding::EmbeddingModel>)> =
+        if let Some(name) = &selected_embedding {
+            sink.emit(LogRecord::new(
+                LogLevel::Info,
+                format!("使用 Embedding 接口：{name}"),
+            ));
+            let adapter = create_embedding_adapter(store.config(), name)?;
+            Some((name.clone(), Arc::from(adapter)))
+        } else {
+            None
+        };
     let knowledge = if let Some((_, arc)) = &embedding {
         load_vector_store(&sink, Arc::clone(arc), &base.output_dir)?
     } else {
@@ -616,9 +620,9 @@ fn run_finalize_chapter(
     } else {
         None
     };
-    let embedding_ref = embedding
-        .as_ref()
-        .map(|(_, adapter)| adapter.as_ref() as &dyn novel_core::embedding::EmbeddingModel);
+    let embedding_ref: Option<&dyn novel_core::embedding::EmbeddingModel> = embedding.as_ref().map(
+        |(_, adapter): &(String, Arc<dyn novel_core::embedding::EmbeddingModel>)| adapter.as_ref(),
+    );
     let request = FinalizeChapterRequest {
         output_dir: command.output_dir.clone(),
         chapter_number: command.chapter_number,

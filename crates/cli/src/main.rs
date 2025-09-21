@@ -4,11 +4,16 @@ use novel_adapters::{
     update_vector_store, AdapterError, EmbeddingModel, EmbeddingModelError, LanguageModelError,
     VectorStoreConfig,
 };
+use novel_core::architecture::ARCHITECTURE_FILE_NAME;
 use novel_core::{
-    ChapterFinalizer, ConfigStore, FinalizeChapterRequest, FinalizeError, LogLevel, LogRecord,
-    LogSink, PromptError, PromptRegistry, StdoutLogSink,
+    ArchitectureError, ArchitectureRequest, ArchitectureService, BlueprintError, ChapterBlueprint,
+    ChapterBlueprintRequest, ChapterBlueprintService, ChapterError, ChapterFinalizer,
+    ChapterPromptRequest, ChapterService, ConfigStore, FinalizeChapterRequest, FinalizeError,
+    KnowledgeBase, LogLevel, LogRecord, LogSink, PromptError, PromptRegistry, StdoutLogSink,
+    BLUEPRINT_FILE_NAME,
 };
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
@@ -26,6 +31,8 @@ fn run() -> Result<(), CliError> {
 
     match cli.command {
         Command::Config(command) => handle_config(&cli.config, command, &sink),
+        Command::Architecture(command) => handle_architecture(&cli.config, command, &sink),
+        Command::Blueprint(command) => handle_blueprint(&cli.config, command, &sink),
         Command::Chapter(command) => handle_chapter(&cli.config, command, &sink),
         Command::Knowledge(command) => handle_knowledge(&cli.config, command, &sink),
     }
@@ -42,12 +49,33 @@ fn handle_config(
     }
 }
 
+fn handle_architecture(
+    config_path: &Path,
+    command: ArchitectureCommand,
+    sink: &dyn LogSink,
+) -> Result<(), CliError> {
+    match command {
+        ArchitectureCommand::Generate(args) => run_generate_architecture(config_path, args, sink),
+    }
+}
+
+fn handle_blueprint(
+    config_path: &Path,
+    command: BlueprintCommand,
+    sink: &dyn LogSink,
+) -> Result<(), CliError> {
+    match command {
+        BlueprintCommand::Generate(args) => run_generate_blueprint(config_path, args, sink),
+    }
+}
+
 fn handle_chapter(
     config_path: &Path,
     command: ChapterCommand,
     sink: &dyn LogSink,
 ) -> Result<(), CliError> {
     match command {
+        ChapterCommand::Draft(args) => run_generate_chapter(config_path, args, sink),
         ChapterCommand::Finalize(args) => run_finalize_chapter(config_path, args, sink),
     }
 }
@@ -62,19 +90,276 @@ fn handle_knowledge(
     }
 }
 
+fn run_generate_architecture(
+    config_path: &Path,
+    args: ArchitectureGenerateArgs,
+    sink: &dyn LogSink,
+) -> Result<(), CliError> {
+    let mut store = ConfigStore::open(config_path.to_path_buf())?;
+    store.ensure_recent_defaults();
+
+    let topic = ensure_novel_field(&store.config().novel.topic, "topic")?;
+    let genre = ensure_novel_field(&store.config().novel.genre, "genre")?;
+    let chapters = ensure_novel_number(store.config().novel.num_chapters, "num_chapters")?;
+    let word_number = ensure_novel_number(store.config().novel.word_number, "word_number")?;
+    let output_dir = ensure_output_dir(&store)?;
+
+    let selected_llm = select_llm_interface(&store, args.llm_interface.clone())?;
+    let prompts = PromptRegistry::from_prompt_config(&store.config().prompts)?;
+
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("开始生成世界观架构：{topic}（类型：{genre}，章节数：{chapters}）"),
+    ));
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("输出目录：{}", output_dir.display()),
+    ));
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("使用 LLM 接口：{}", selected_llm),
+    ));
+
+    let mut service = ArchitectureService::new(&prompts, sink);
+    if let Some(retries) = args.max_retries {
+        service = service.with_max_retries(retries);
+    }
+
+    let llm_adapter = create_llm_adapter(store.config(), &selected_llm)?;
+    let request = ArchitectureRequest {
+        topic,
+        genre,
+        number_of_chapters: chapters,
+        word_number,
+        user_guidance: args.guidance.unwrap_or_default(),
+    };
+
+    let snapshot = service.generate(llm_adapter.as_ref(), &output_dir, &request)?;
+
+    let architecture_path = output_dir.join(ARCHITECTURE_FILE_NAME);
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("小说架构已写入：{}", architecture_path.display()),
+    ));
+    if snapshot.is_complete() {
+        sink.log(LogRecord::new(
+            LogLevel::Info,
+            "世界观、角色状态与情节架构均已生成完成。".to_string(),
+        ));
+    }
+
+    store.touch_llm_interface(selected_llm);
+    store.save()?;
+
+    Ok(())
+}
+
+fn run_generate_blueprint(
+    config_path: &Path,
+    args: BlueprintGenerateArgs,
+    sink: &dyn LogSink,
+) -> Result<(), CliError> {
+    let mut store = ConfigStore::open(config_path.to_path_buf())?;
+    store.ensure_recent_defaults();
+
+    let chapters = ensure_novel_number(store.config().novel.num_chapters, "num_chapters")?;
+    let output_dir = ensure_output_dir(&store)?;
+
+    let selected_llm = select_llm_interface(&store, args.llm_interface.clone())?;
+    let prompts = PromptRegistry::from_prompt_config(&store.config().prompts)?;
+
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("开始生成章节蓝图，共 {chapters} 章。"),
+    ));
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("使用 LLM 接口：{}", selected_llm),
+    ));
+
+    let mut service = ChapterBlueprintService::new(&prompts, sink);
+    if let Some(retries) = args.max_retries {
+        service = service.with_max_retries(retries);
+    }
+
+    let llm_adapter = create_llm_adapter(store.config(), &selected_llm)?;
+    let default_max_tokens = store
+        .config()
+        .get_llm_profile(&selected_llm)
+        .map(|profile| profile.max_tokens)
+        .unwrap_or(4096);
+    let max_tokens = args.max_tokens.unwrap_or(default_max_tokens);
+    let request =
+        ChapterBlueprintRequest::new(chapters, args.guidance.unwrap_or_default(), max_tokens);
+
+    let blueprint = service.generate(llm_adapter.as_ref(), &output_dir, &request)?;
+
+    let blueprint_path = output_dir.join(BLUEPRINT_FILE_NAME);
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!(
+            "章节蓝图已写入：{}（共 {} 章）",
+            blueprint_path.display(),
+            blueprint.len()
+        ),
+    ));
+
+    store.touch_llm_interface(selected_llm);
+    store.save()?;
+
+    Ok(())
+}
+
+fn run_generate_chapter(
+    config_path: &Path,
+    args: ChapterDraftArgs,
+    sink: &dyn LogSink,
+) -> Result<(), CliError> {
+    if args.id == 0 {
+        return Err(CliError::InvalidChapterNumber(args.id));
+    }
+
+    let mut store = ConfigStore::open(config_path.to_path_buf())?;
+    store.ensure_recent_defaults();
+
+    let output_dir = ensure_output_dir(&store)?;
+    let word_number = ensure_novel_number(store.config().novel.word_number, "word_number")?;
+
+    let selected_llm = select_llm_interface(&store, args.llm_interface.clone())?;
+    let selected_embedding =
+        select_embedding_interface_optional(&store, args.embedding_interface.clone())?;
+    let prompts = PromptRegistry::from_prompt_config(&store.config().prompts)?;
+
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("开始生成第{}章草稿。", args.id),
+    ));
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("使用 LLM 接口：{}", selected_llm),
+    ));
+
+    let blueprint_path = output_dir.join(BLUEPRINT_FILE_NAME);
+    let blueprint_raw = match fs::read_to_string(&blueprint_path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(CliError::MissingBlueprint(blueprint_path))
+        }
+        Err(source) => {
+            return Err(CliError::Io {
+                path: blueprint_path,
+                source,
+            })
+        }
+    };
+
+    if blueprint_raw.trim().is_empty() {
+        return Err(CliError::EmptyBlueprint(blueprint_path));
+    }
+
+    let blueprint = ChapterBlueprint::from_text(blueprint_raw);
+
+    let mut request = ChapterPromptRequest::new(&output_dir, &blueprint, args.id, word_number);
+    if let Some(guidance) = args.guidance {
+        request.user_guidance = guidance;
+    }
+    if let Some(characters) = args.characters {
+        request.characters_involved = characters;
+    }
+    if let Some(items) = args.items {
+        request.key_items = items;
+    }
+    if let Some(scene) = args.scene {
+        request.scene_location = scene;
+    }
+    if let Some(time) = args.time {
+        request.time_constraint = time;
+    }
+    if let Some(k) = args.retrieval_k {
+        request.embedding_retrieval_k = k;
+    }
+    if let Some(history) = args.history {
+        request.history_chapter_count = history.max(1);
+    }
+
+    let llm_adapter = create_llm_adapter(store.config(), &selected_llm)?;
+
+    let mut embedding_name_used = None;
+    let mut vector_store = None;
+    if let Some(name) = selected_embedding.clone() {
+        sink.log(LogRecord::new(
+            LogLevel::Info,
+            format!("使用 Embedding 接口：{}", name),
+        ));
+        let adapter = create_embedding_adapter(store.config(), &name)?;
+        let embedding_arc: Arc<dyn EmbeddingModel> = adapter.into();
+        match load_vector_store(sink, Arc::clone(&embedding_arc), &output_dir)? {
+            Some(store_instance) => {
+                sink.log(LogRecord::new(
+                    LogLevel::Info,
+                    "已加载向量库上下文，将启用语义检索。".to_string(),
+                ));
+                vector_store = Some(store_instance);
+                embedding_name_used = Some(name);
+            }
+            None => {
+                sink.log(LogRecord::new(
+                    LogLevel::Warn,
+                    "未检测到向量库元数据，章节将在无检索模式下生成。".to_string(),
+                ));
+            }
+        }
+    } else {
+        sink.log(LogRecord::new(
+            LogLevel::Info,
+            "未配置 Embedding 接口，章节将在无知识检索模式下生成。".to_string(),
+        ));
+    }
+
+    let custom_prompt = if let Some(path) = args.prompt_file.as_ref() {
+        sink.log(LogRecord::new(
+            LogLevel::Info,
+            format!("读取自定义提示词文件：{}", path.display()),
+        ));
+        Some(fs::read_to_string(path).map_err(|source| CliError::Io {
+            path: path.clone(),
+            source,
+        })?)
+    } else {
+        None
+    };
+
+    let knowledge_base: Option<&dyn KnowledgeBase> = vector_store
+        .as_ref()
+        .map(|store| store as &dyn KnowledgeBase);
+
+    let chapter_service = ChapterService::new(&prompts, sink);
+    let draft = chapter_service.generate_chapter_draft(
+        llm_adapter.as_ref(),
+        knowledge_base,
+        &request,
+        custom_prompt.as_deref(),
+    )?;
+
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("章节草稿已写入：{}", draft.path.display()),
+    ));
+
+    store.touch_llm_interface(selected_llm);
+    if let Some(name) = embedding_name_used.or(selected_embedding) {
+        store.touch_embedding_interface(name);
+    }
+    store.save()?;
+
+    Ok(())
+}
+
 fn run_test_llm(config_path: &Path, args: TestLlmArgs, sink: &dyn LogSink) -> Result<(), CliError> {
     let mut store = ConfigStore::open(config_path.to_path_buf())?;
     store.ensure_recent_defaults();
 
-    let selected = if let Some(interface) = args.interface {
-        interface
-    } else if let Some(name) = store.last_llm_interface() {
-        name.to_string()
-    } else if let Some(name) = store.config().llm_profiles.keys().next() {
-        name.clone()
-    } else {
-        return Err(CliError::MissingLlmProfile);
-    };
+    let selected = select_llm_interface(&store, args.interface)?;
 
     let profile = store
         .config()
@@ -144,15 +429,7 @@ fn run_test_embedding(
     let mut store = ConfigStore::open(config_path.to_path_buf())?;
     store.ensure_recent_defaults();
 
-    let selected = if let Some(interface) = args.interface {
-        interface
-    } else if let Some(name) = store.last_embedding_interface() {
-        name.to_string()
-    } else if let Some(name) = store.config().embedding_profiles.keys().next() {
-        name.clone()
-    } else {
-        return Err(CliError::MissingEmbeddingProfile);
-    };
+    let selected = select_embedding_interface(&store, args.interface)?;
 
     let profile = store
         .config()
@@ -228,25 +505,9 @@ fn run_finalize_chapter(
     }
     let output_dir = PathBuf::from(output_dir_str);
 
-    let selected_llm = if let Some(interface) = args.llm_interface.clone() {
-        interface
-    } else if let Some(name) = store.last_llm_interface() {
-        name.to_string()
-    } else if let Some(name) = store.config().llm_profiles.keys().next() {
-        name.clone()
-    } else {
-        return Err(CliError::MissingLlmProfile);
-    };
-
-    let selected_embedding = if let Some(interface) = args.embedding_interface.clone() {
-        Some(interface)
-    } else if let Some(name) = store.last_embedding_interface() {
-        Some(name.to_string())
-    } else if let Some(name) = store.config().embedding_profiles.keys().next() {
-        Some(name.clone())
-    } else {
-        None
-    };
+    let selected_llm = select_llm_interface(&store, args.llm_interface.clone())?;
+    let selected_embedding =
+        select_embedding_interface_optional(&store, args.embedding_interface.clone())?;
 
     let prompts = PromptRegistry::from_prompt_config(&store.config().prompts)?;
 
@@ -349,15 +610,7 @@ fn run_import_knowledge(
     }
     let output_dir = PathBuf::from(output_dir_str);
 
-    let selected_embedding = if let Some(interface) = args.embedding_interface.clone() {
-        interface
-    } else if let Some(name) = store.last_embedding_interface() {
-        name.to_string()
-    } else if let Some(name) = store.config().embedding_profiles.keys().next() {
-        name.clone()
-    } else {
-        return Err(CliError::MissingEmbeddingProfile);
-    };
+    let selected_embedding = select_embedding_interface(&store, args.embedding_interface.clone())?;
 
     sink.log(LogRecord::new(
         LogLevel::Info,
@@ -386,6 +639,98 @@ fn run_import_knowledge(
     Ok(())
 }
 
+fn ensure_output_dir(store: &ConfigStore) -> Result<PathBuf, CliError> {
+    let output = store.config().novel.filepath.trim();
+    if output.is_empty() {
+        Err(CliError::MissingOutputDir)
+    } else {
+        Ok(PathBuf::from(output))
+    }
+}
+
+fn ensure_novel_field(value: &str, field: &'static str) -> Result<String, CliError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Err(CliError::MissingNovelField { field })
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+fn ensure_novel_number(value: u32, field: &'static str) -> Result<u32, CliError> {
+    if value == 0 {
+        Err(CliError::MissingNovelNumber { field })
+    } else {
+        Ok(value)
+    }
+}
+
+fn select_llm_interface(
+    store: &ConfigStore,
+    preferred: Option<String>,
+) -> Result<String, CliError> {
+    if let Some(name) = normalize_preference(preferred) {
+        if store.config().llm_profiles.contains_key(&name) {
+            return Ok(name);
+        }
+        return Err(CliError::UnknownInterface(name));
+    }
+
+    if let Some(name) = store.last_llm_interface() {
+        return Ok(name.to_string());
+    }
+
+    if let Some(name) = store.config().llm_profiles.keys().next() {
+        return Ok(name.clone());
+    }
+
+    Err(CliError::MissingLlmProfile)
+}
+
+fn select_embedding_interface(
+    store: &ConfigStore,
+    preferred: Option<String>,
+) -> Result<String, CliError> {
+    if let Some(name) = normalize_preference(preferred) {
+        if store.config().embedding_profiles.contains_key(&name) {
+            return Ok(name);
+        }
+        return Err(CliError::UnknownInterface(name));
+    }
+
+    if let Some(name) = store.last_embedding_interface() {
+        return Ok(name.to_string());
+    }
+
+    if let Some(name) = store.config().embedding_profiles.keys().next() {
+        return Ok(name.clone());
+    }
+
+    Err(CliError::MissingEmbeddingProfile)
+}
+
+fn select_embedding_interface_optional(
+    store: &ConfigStore,
+    preferred: Option<String>,
+) -> Result<Option<String>, CliError> {
+    match select_embedding_interface(store, preferred) {
+        Ok(name) => Ok(Some(name)),
+        Err(CliError::MissingEmbeddingProfile) => Ok(None),
+        Err(other) => Err(other),
+    }
+}
+
+fn normalize_preference(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 #[derive(Debug, Error)]
 enum CliError {
     #[error("配置文件错误: {0}")]
@@ -396,8 +741,20 @@ enum CliError {
     MissingEmbeddingProfile,
     #[error("小说输出目录未配置，无法执行该操作。")]
     MissingOutputDir,
+    #[error("小说配置 `{field}` 不能为空，请在 config.json 中补全。")]
+    MissingNovelField { field: &'static str },
+    #[error("小说配置 `{field}` 必须大于 0。")]
+    MissingNovelNumber { field: &'static str },
+    #[error("章节编号必须从 1 开始，收到 {0}")]
+    InvalidChapterNumber(u32),
     #[error("未找到名为 `{0}` 的接口配置")]
     UnknownInterface(String),
+    #[error("章节蓝图文件不存在：{0}")]
+    MissingBlueprint(PathBuf),
+    #[error("章节蓝图文件为空：{0}")]
+    EmptyBlueprint(PathBuf),
+    #[error("读取文件 `{path}` 失败: {source}")]
+    Io { path: PathBuf, source: io::Error },
     #[error("适配器调用失败: {0}")]
     Adapter(#[from] AdapterError),
     #[error("LLM 调用失败: {0}")]
@@ -406,6 +763,12 @@ enum CliError {
     Embedding(#[from] EmbeddingModelError),
     #[error("提示词加载失败: {0}")]
     Prompt(#[from] PromptError),
+    #[error("架构生成失败: {0}")]
+    Architecture(#[from] ArchitectureError),
+    #[error("章节蓝图生成失败: {0}")]
+    Blueprint(#[from] BlueprintError),
+    #[error("章节生成失败: {0}")]
+    Chapter(#[from] ChapterError),
     #[error("章节定稿失败: {0}")]
     Finalize(#[from] FinalizeError),
     #[error("{0}")]
@@ -432,6 +795,12 @@ enum Command {
     /// 配置相关操作
     #[command(subcommand)]
     Config(ConfigCommand),
+    /// 小说架构相关操作
+    #[command(subcommand)]
+    Architecture(ArchitectureCommand),
+    /// 章节蓝图相关操作
+    #[command(subcommand)]
+    Blueprint(BlueprintCommand),
     /// 章节相关操作
     #[command(subcommand)]
     Chapter(ChapterCommand),
@@ -449,7 +818,21 @@ enum ConfigCommand {
 }
 
 #[derive(Subcommand)]
+enum ArchitectureCommand {
+    /// 生成或继续补全世界观架构文档
+    Generate(ArchitectureGenerateArgs),
+}
+
+#[derive(Subcommand)]
+enum BlueprintCommand {
+    /// 生成或续跑章节蓝图
+    Generate(BlueprintGenerateArgs),
+}
+
+#[derive(Subcommand)]
 enum ChapterCommand {
+    /// 生成章节草稿
+    Draft(ChapterDraftArgs),
     /// 定稿指定章节，并同步摘要、角色状态及向量库
     Finalize(FinalizeArgs),
 }
@@ -475,6 +858,35 @@ struct TestEmbeddingArgs {
 }
 
 #[derive(Args)]
+struct ArchitectureGenerateArgs {
+    /// 指定用于生成架构的 LLM 接口名称
+    #[arg(long)]
+    llm_interface: Option<String>,
+    /// 向模型追加的补充设定
+    #[arg(long, value_name = "TEXT")]
+    guidance: Option<String>,
+    /// 失败重试次数上限，默认使用 3
+    #[arg(long, value_name = "N")]
+    max_retries: Option<usize>,
+}
+
+#[derive(Args)]
+struct BlueprintGenerateArgs {
+    /// 指定用于生成蓝图的 LLM 接口名称
+    #[arg(long)]
+    llm_interface: Option<String>,
+    /// 向模型追加的目录编排指导
+    #[arg(long, value_name = "TEXT")]
+    guidance: Option<String>,
+    /// 限制单次调用的最大 tokens，用于控制分块大小
+    #[arg(long, value_name = "TOKENS")]
+    max_tokens: Option<u32>,
+    /// 失败重试次数上限，默认使用 3
+    #[arg(long, value_name = "N")]
+    max_retries: Option<usize>,
+}
+
+#[derive(Args)]
 struct FinalizeArgs {
     /// 需要定稿的章节编号
     #[arg(long, value_name = "ID")]
@@ -485,6 +897,43 @@ struct FinalizeArgs {
     /// 指定用于更新向量库的 Embedding 接口名称
     #[arg(long)]
     embedding_interface: Option<String>,
+}
+
+#[derive(Args)]
+struct ChapterDraftArgs {
+    /// 需要生成的章节编号
+    #[arg(long, value_name = "ID")]
+    id: u32,
+    /// 指定用于生成草稿的 LLM 接口名称
+    #[arg(long)]
+    llm_interface: Option<String>,
+    /// 指定用于知识检索的 Embedding 接口名称
+    #[arg(long)]
+    embedding_interface: Option<String>,
+    /// 本章的额外剧情指导
+    #[arg(long, value_name = "TEXT")]
+    guidance: Option<String>,
+    /// 重要角色提示
+    #[arg(long, value_name = "TEXT")]
+    characters: Option<String>,
+    /// 关键道具/线索提示
+    #[arg(long, value_name = "TEXT")]
+    items: Option<String>,
+    /// 场景地点提示
+    #[arg(long, value_name = "TEXT")]
+    scene: Option<String>,
+    /// 时间限制/节奏提示
+    #[arg(long, value_name = "TEXT")]
+    time: Option<String>,
+    /// 知识检索时使用的片段数量
+    #[arg(long, value_name = "N")]
+    retrieval_k: Option<usize>,
+    /// 构建上下文时纳入的历史章节数量
+    #[arg(long, value_name = "N")]
+    history: Option<usize>,
+    /// 外部提示词文件，覆盖自动生成的提示词
+    #[arg(long, value_name = "FILE")]
+    prompt_file: Option<PathBuf>,
 }
 
 #[derive(Args)]

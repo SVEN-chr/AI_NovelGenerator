@@ -17,7 +17,7 @@ pub fn apply_content_rules(contexts: &[String], chapter_number: u32) -> Vec<Stri
         .collect()
 }
 
-pub fn filter_knowledge_contexts<M: LanguageModel>(
+pub fn filter_knowledge_contexts<M: LanguageModel + ?Sized>(
     model: &M,
     prompts: &PromptRegistry,
     chapter: &ChapterBlueprintEntry,

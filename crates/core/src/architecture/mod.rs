@@ -356,7 +356,7 @@ impl<'a> ArchitectureService<'a> {
         self
     }
 
-    pub fn generate<M: LanguageModel>(
+    pub fn generate<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
         output_dir: impl AsRef<Path>,
@@ -382,7 +382,7 @@ impl<'a> ArchitectureService<'a> {
         Ok(state.snapshot())
     }
 
-    fn generate_core_seed<M: LanguageModel>(
+    fn generate_core_seed<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
         output_dir: &Path,
@@ -429,7 +429,7 @@ impl<'a> ArchitectureService<'a> {
         Ok(())
     }
 
-    fn generate_character_dynamics<M: LanguageModel>(
+    fn generate_character_dynamics<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
         output_dir: &Path,
@@ -479,7 +479,7 @@ impl<'a> ArchitectureService<'a> {
         Ok(())
     }
 
-    fn generate_character_state<M: LanguageModel>(
+    fn generate_character_state<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
         output_dir: &Path,
@@ -542,7 +542,7 @@ impl<'a> ArchitectureService<'a> {
         Ok(())
     }
 
-    fn generate_world_building<M: LanguageModel>(
+    fn generate_world_building<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
         output_dir: &Path,
@@ -591,7 +591,7 @@ impl<'a> ArchitectureService<'a> {
         Ok(())
     }
 
-    fn generate_plot_architecture<M: LanguageModel>(
+    fn generate_plot_architecture<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
         output_dir: &Path,
@@ -673,7 +673,7 @@ impl<'a> ArchitectureService<'a> {
         Ok(())
     }
 
-    fn invoke_with_cleaning<M: LanguageModel>(
+    fn invoke_with_cleaning<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
         stage: ArchitectureStage,

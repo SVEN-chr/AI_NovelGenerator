@@ -28,7 +28,7 @@ pub fn load_recent_chapters(dir: &Path, current: u32, count: usize) -> Vec<Strin
     texts
 }
 
-pub fn summarize_recent_chapters<M: LanguageModel>(
+pub fn summarize_recent_chapters<M: LanguageModel + ?Sized>(
     model: &M,
     prompts: &PromptRegistry,
     chapter: &ChapterBlueprintEntry,

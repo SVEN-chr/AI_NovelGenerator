@@ -4,9 +4,7 @@ use eframe::egui::{self, Color32};
 
 use crate::state::{ActiveTab, AppState, ChapterPreviewState, ConfirmationDialog, EditorTarget};
 use crate::tasks::{
-    BuildChapterPromptCommand, GenerateArchitectureCommand, GenerateBlueprintCommand,
-    GenerateChapterDraftCommand, ImportKnowledgeCommand, TaskCommand, TaskController, TaskEvent,
-    TaskKind, TestEmbeddingCommand, TestLlmCommand,
+    TaskCommand, TaskController, TaskEvent, TaskKind, TestEmbeddingCommand, TestLlmCommand,
 };
 use novel_core::logging::{LogLevel, LogRecord};
 
@@ -591,12 +589,9 @@ impl NovelGeneratorApp {
         }
     }
     fn show_role_library_tab(&mut self, ui: &mut egui::Ui) {
-        let output_dir = match self.state.novel.output_dir_path() {
-            Some(path) => path,
-            None => {
-                ui.label("请先配置小说输出目录。");
-                return;
-            }
+        let Some(output_dir) = self.state.novel.output_dir_path() else {
+            ui.label("请先配置小说输出目录。");
+            return;
         };
 
         if self.state.role_library.categories.is_empty() {
@@ -739,13 +734,10 @@ impl NovelGeneratorApp {
         });
     }
     fn show_chapters_tab(&mut self, ui: &mut egui::Ui) {
-        let output_dir = match self.state.novel.output_dir_path() {
-            Some(path) => path,
-            None => {
-                ui.label("请先配置小说输出目录。");
-                return;
-            }
-        };
+        if self.state.novel.output_dir_path().is_none() {
+            ui.label("请先配置小说输出目录。");
+            return;
+        }
 
         ui.horizontal(|ui| {
             if ui.button("刷新").clicked() {

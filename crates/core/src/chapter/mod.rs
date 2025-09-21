@@ -229,7 +229,7 @@ impl<'a> ChapterService<'a> {
         Self { prompts, sink }
     }
 
-    pub fn build_chapter_prompt<M: LanguageModel, K: KnowledgeBase>(
+    pub fn build_chapter_prompt<M: LanguageModel + ?Sized, K: KnowledgeBase + ?Sized>(
         &self,
         model: &M,
         knowledge_base: Option<&K>,
@@ -364,7 +364,7 @@ impl<'a> ChapterService<'a> {
         })
     }
 
-    pub fn generate_chapter_draft<M: LanguageModel, K: KnowledgeBase>(
+    pub fn generate_chapter_draft<M: LanguageModel + ?Sized, K: KnowledgeBase + ?Sized>(
         &self,
         model: &M,
         knowledge_base: Option<&K>,
