@@ -2,6 +2,7 @@ pub mod architecture;
 pub mod blueprint;
 pub mod chapter;
 pub mod config;
+pub mod embedding;
 pub mod logging;
 pub mod prompts;
 
@@ -13,6 +14,10 @@ pub use blueprint::{
     BlueprintError, ChapterBlueprint, ChapterBlueprintEntry, ChapterBlueprintRequest,
     ChapterBlueprintService, BLUEPRINT_FILE_NAME,
 };
+pub use chapter::finalization::{
+    ChapterFinalizer, EnrichChapterRequest, FinalizeChapterRequest, FinalizeChapterResult,
+    FinalizeError,
+};
 pub use chapter::{
     ChapterDraft, ChapterError, ChapterPrompt, ChapterPromptRequest, ChapterService, ChapterStage,
     KnowledgeBase, KnowledgeBaseError,
@@ -21,6 +26,7 @@ pub use config::{
     Config, ConfigError, ConfigStore, EmbeddingConfig, LlmConfig, NovelConfig, PromptConfig,
     RecentUsage,
 };
+pub use embedding::{EmbeddingModel, EmbeddingModelError};
 pub use logging::{
     LogLevel, LogRecord, LogSink, NullLogSink, SharedLogSink, StdoutLogSink, VecLogSink,
 };
