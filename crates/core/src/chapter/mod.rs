@@ -15,7 +15,6 @@ mod keywords;
 mod knowledge;
 mod prompt;
 mod summary;
-mod vector_store;
 
 use keywords::generate_keyword_groups;
 use knowledge::{apply_content_rules, filter_knowledge_contexts};
@@ -31,6 +30,7 @@ const PREVIOUS_EXCERPT_CHARS: usize = 800;
 const KNOWLEDGE_SNIPPET_MAX_CHARS: usize = 600;
 const KNOWLEDGE_FALLBACK: &str = "（知识库处理失败）";
 const KNOWLEDGE_EMPTY: &str = "（无相关知识库内容）";
+const KNOWLEDGE_SIMILARITY_MAX_CHARS: usize = 2_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChapterStage {
@@ -97,6 +97,40 @@ pub trait KnowledgeBase: Send + Sync {
     }
 
     fn search(&self, query: &str, limit: usize) -> Result<Vec<String>, KnowledgeBaseError>;
+
+    fn similarity_search(&self, query: &str, limit: usize) -> Result<String, KnowledgeBaseError> {
+        let mut combined = String::new();
+        let max_len = KNOWLEDGE_SIMILARITY_MAX_CHARS.max(1);
+        let sanitized_limit = limit.max(1);
+        let chunks = self.search(query, sanitized_limit)?;
+
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            let trimmed = chunk.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(trimmed);
+
+            if combined.chars().count() >= max_len {
+                let truncated: String = combined.chars().take(max_len).collect();
+                return Ok(truncated);
+            }
+
+            if index + 1 == sanitized_limit {
+                break;
+            }
+        }
+
+        if combined.chars().count() > max_len {
+            combined = combined.chars().take(max_len).collect();
+        }
+
+        Ok(combined)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

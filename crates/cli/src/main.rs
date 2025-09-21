@@ -1,13 +1,16 @@
 use clap::{Args, Parser, Subcommand};
 use novel_adapters::{
-    create_embedding_adapter, create_llm_adapter, AdapterError, EmbeddingModel,
-    EmbeddingModelError, LanguageModelError,
+    create_embedding_adapter, create_llm_adapter, import_knowledge_file, load_vector_store,
+    update_vector_store, AdapterError, EmbeddingModel, EmbeddingModelError, LanguageModelError,
+    VectorStoreConfig,
 };
 use novel_core::{
     ChapterFinalizer, ConfigStore, FinalizeChapterRequest, FinalizeError, LogLevel, LogRecord,
     LogSink, PromptError, PromptRegistry, StdoutLogSink,
 };
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thiserror::Error;
 
 fn main() {
@@ -24,6 +27,7 @@ fn run() -> Result<(), CliError> {
     match cli.command {
         Command::Config(command) => handle_config(&cli.config, command, &sink),
         Command::Chapter(command) => handle_chapter(&cli.config, command, &sink),
+        Command::Knowledge(command) => handle_knowledge(&cli.config, command, &sink),
     }
 }
 
@@ -45,6 +49,16 @@ fn handle_chapter(
 ) -> Result<(), CliError> {
     match command {
         ChapterCommand::Finalize(args) => run_finalize_chapter(config_path, args, sink),
+    }
+}
+
+fn handle_knowledge(
+    config_path: &Path,
+    command: KnowledgeCommand,
+    sink: &dyn LogSink,
+) -> Result<(), CliError> {
+    match command {
+        KnowledgeCommand::Import(args) => run_import_knowledge(config_path, args, sink),
     }
 }
 
@@ -254,7 +268,8 @@ fn run_finalize_chapter(
                 format!("使用 Embedding 接口：{}", name),
             ));
             let adapter = create_embedding_adapter(store.config(), &name)?;
-            Some((name, adapter))
+            let arc: Arc<dyn EmbeddingModel> = adapter.into();
+            Some((name, arc))
         }
         None => {
             sink.log(LogRecord::new(
@@ -270,14 +285,12 @@ fn run_finalize_chapter(
         .as_ref()
         .map(|(_, adapter)| adapter.as_ref());
 
-    let result = finalizer.finalize_chapter(
-        llm_adapter.as_ref(),
-        embedding_ref,
-        &FinalizeChapterRequest {
-            output_dir,
-            chapter_number: args.id,
-        },
-    )?;
+    let finalize_request = FinalizeChapterRequest {
+        output_dir: output_dir.clone(),
+        chapter_number: args.id,
+    };
+    let result =
+        finalizer.finalize_chapter(llm_adapter.as_ref(), embedding_ref, &finalize_request)?;
 
     sink.log(LogRecord::new(
         LogLevel::Info,
@@ -287,11 +300,28 @@ fn run_finalize_chapter(
         LogLevel::Info,
         format!("角色状态已写入：{}", result.character_state_path.display()),
     ));
-    if let Some((_, _)) = &embedding_adapter {
+    let mut vector_segments = 0usize;
+    if let Some((name, embedding_arc)) = &embedding_adapter {
+        match load_vector_store(sink, Arc::clone(embedding_arc), &output_dir)? {
+            Some(store) => {
+                let chapter_text = fs::read_to_string(&result.chapter_path).map_err(|err| {
+                    CliError::Adapter(AdapterError::io(&result.chapter_path, err))
+                })?;
+                vector_segments = update_vector_store(sink, &store, args.id, &chapter_text)?;
+            }
+            None => {
+                sink.log(LogRecord::new(
+                    LogLevel::Warn,
+                    "未找到向量库配置，定稿后未执行自动向量写入。".to_string(),
+                ));
+            }
+        }
+
         sink.log(LogRecord::new(
             LogLevel::Info,
-            format!("向量库新增片段数量：{}", result.segments_written),
+            format!("向量库新增片段数量：{}", vector_segments),
         ));
+        store.touch_embedding_interface(name.clone());
     }
 
     sink.log(LogRecord::new(
@@ -300,9 +330,57 @@ fn run_finalize_chapter(
     ));
 
     store.touch_llm_interface(selected_llm);
-    if let Some((name, _)) = &embedding_adapter {
-        store.touch_embedding_interface(name.clone());
+    store.save()?;
+
+    Ok(())
+}
+
+fn run_import_knowledge(
+    config_path: &Path,
+    args: KnowledgeImportArgs,
+    sink: &dyn LogSink,
+) -> Result<(), CliError> {
+    let mut store = ConfigStore::open(config_path.to_path_buf())?;
+    store.ensure_recent_defaults();
+
+    let output_dir_str = store.config().novel.filepath.trim();
+    if output_dir_str.is_empty() {
+        return Err(CliError::MissingOutputDir);
     }
+    let output_dir = PathBuf::from(output_dir_str);
+
+    let selected_embedding = if let Some(interface) = args.embedding_interface.clone() {
+        interface
+    } else if let Some(name) = store.last_embedding_interface() {
+        name.to_string()
+    } else if let Some(name) = store.config().embedding_profiles.keys().next() {
+        name.clone()
+    } else {
+        return Err(CliError::MissingEmbeddingProfile);
+    };
+
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("开始导入知识库文件：{}", args.file.display()),
+    ));
+
+    let embedding_adapter = create_embedding_adapter(store.config(), &selected_embedding)?;
+    let embedding_arc: Arc<dyn EmbeddingModel> = embedding_adapter.into();
+
+    let config = VectorStoreConfig {
+        base_url: args.vector_url.clone(),
+        collection_name: args.collection.clone(),
+        api_key: args.api_key.clone(),
+    };
+
+    let inserted = import_knowledge_file(sink, embedding_arc, &output_dir, config, &args.file)?;
+
+    sink.log(LogRecord::new(
+        LogLevel::Info,
+        format!("知识库导入完成，新增片段数量：{}", inserted),
+    ));
+
+    store.touch_embedding_interface(selected_embedding);
     store.save()?;
 
     Ok(())
@@ -357,6 +435,9 @@ enum Command {
     /// 章节相关操作
     #[command(subcommand)]
     Chapter(ChapterCommand),
+    /// 知识库相关操作
+    #[command(subcommand)]
+    Knowledge(KnowledgeCommand),
 }
 
 #[derive(Subcommand)]
@@ -371,6 +452,12 @@ enum ConfigCommand {
 enum ChapterCommand {
     /// 定稿指定章节，并同步摘要、角色状态及向量库
     Finalize(FinalizeArgs),
+}
+
+#[derive(Subcommand)]
+enum KnowledgeCommand {
+    /// 导入本地知识文件至向量库
+    Import(KnowledgeImportArgs),
 }
 
 #[derive(Args)]
@@ -398,4 +485,23 @@ struct FinalizeArgs {
     /// 指定用于更新向量库的 Embedding 接口名称
     #[arg(long)]
     embedding_interface: Option<String>,
+}
+
+#[derive(Args)]
+struct KnowledgeImportArgs {
+    /// 待导入的知识库文件路径
+    #[arg(long, value_name = "FILE")]
+    file: PathBuf,
+    /// 指定用于生成向量的 Embedding 接口名称
+    #[arg(long)]
+    embedding_interface: Option<String>,
+    /// 向量库服务的 Base URL（例如 http://localhost:6333）
+    #[arg(long, default_value = "http://localhost:6333")]
+    vector_url: String,
+    /// 向量库集合名称，默认为 novel_collection
+    #[arg(long, default_value = "novel_collection")]
+    collection: String,
+    /// 向量库 API Key，可选
+    #[arg(long)]
+    api_key: Option<String>,
 }

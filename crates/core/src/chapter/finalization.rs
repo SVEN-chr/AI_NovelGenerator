@@ -9,8 +9,6 @@ use crate::embedding::EmbeddingModel;
 use crate::logging::{LogLevel, LogRecord, LogSink};
 use crate::prompts::{PromptArguments, PromptError, PromptRegistry};
 
-use super::vector_store;
-
 const GLOBAL_SUMMARY_FILE_NAME: &str = "global_summary.txt";
 const CHAPTERS_DIR_NAME: &str = "chapters";
 const MAX_RETRIES: usize = 3;
@@ -108,7 +106,7 @@ impl<'a> ChapterFinalizer<'a> {
     pub fn finalize_chapter<M: LanguageModel + ?Sized>(
         &self,
         model: &M,
-        embedding: Option<&dyn EmbeddingModel>,
+        _embedding: Option<&dyn EmbeddingModel>,
         request: &FinalizeChapterRequest,
     ) -> Result<FinalizeChapterResult, FinalizeError> {
         let chapter_path = request
@@ -206,26 +204,6 @@ impl<'a> ChapterFinalizer<'a> {
             }
         })?;
 
-        let mut segments_written = 0usize;
-        if let Some(embedding_model) = embedding {
-            match vector_store::update_vector_store(
-                self.sink,
-                embedding_model,
-                &request.output_dir,
-                request.chapter_number,
-                trimmed,
-            ) {
-                Ok(count) => {
-                    segments_written = count;
-                }
-                Err(err) => {
-                    self.log(LogLevel::Error, format!("更新向量库失败：{err}"));
-                }
-            }
-        } else {
-            self.log(LogLevel::Info, "未提供向量模型，跳过向量库更新。");
-        }
-
         self.log(
             LogLevel::Info,
             format!(
@@ -240,7 +218,7 @@ impl<'a> ChapterFinalizer<'a> {
             character_state_path,
             summary_text: summary_to_write,
             character_state_text: character_state_to_write,
-            segments_written,
+            segments_written: 0,
         })
     }
 

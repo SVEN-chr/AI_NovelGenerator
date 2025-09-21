@@ -5,6 +5,7 @@ pub mod config;
 pub mod embedding;
 pub mod logging;
 pub mod prompts;
+pub mod vectorstore;
 
 pub use architecture::{
     ArchitectureError, ArchitectureRequest, ArchitectureService, ArchitectureSnapshot,
@@ -33,3 +34,4 @@ pub use logging::{
 pub use prompts::{
     PromptArguments, PromptError, PromptMetadata, PromptRegistry, PromptSource, PromptTemplate,
 };
+pub use vectorstore::{split_text_segments, DEFAULT_SEGMENT_CHAR_LIMIT};
