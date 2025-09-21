@@ -9,15 +9,12 @@ use reqwest::header::{self, HeaderMap, HeaderValue};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
+use novel_core::architecture::{LanguageModel, LanguageModelError};
 use novel_core::config::{Config, LlmConfig};
 
 use crate::base_url::check_base_url;
 use crate::error::AdapterError;
 use crate::retry::{call_with_retry, RetryConfig};
-
-pub trait LanguageModel: Send + Sync {
-    fn invoke(&self, prompt: &str) -> Result<String, AdapterError>;
-}
 
 pub fn create_llm_adapter(
     config: &Config,
@@ -246,8 +243,8 @@ impl OpenAiLikeAdapter {
 }
 
 impl LanguageModel for OpenAiLikeAdapter {
-    fn invoke(&self, prompt: &str) -> Result<String, AdapterError> {
-        call_with_retry(|| self.invoke_once(prompt), &self.retry)
+    fn invoke(&self, prompt: &str) -> Result<String, LanguageModelError> {
+        call_with_retry(|| self.invoke_once(prompt), &self.retry).map_err(Into::into)
     }
 }
 
@@ -346,8 +343,8 @@ impl AzureOpenAiAdapter {
 }
 
 impl LanguageModel for AzureOpenAiAdapter {
-    fn invoke(&self, prompt: &str) -> Result<String, AdapterError> {
-        call_with_retry(|| self.invoke_once(prompt), &self.retry)
+    fn invoke(&self, prompt: &str) -> Result<String, LanguageModelError> {
+        call_with_retry(|| self.invoke_once(prompt), &self.retry).map_err(Into::into)
     }
 }
 
@@ -453,8 +450,8 @@ impl AzureAiAdapter {
 }
 
 impl LanguageModel for AzureAiAdapter {
-    fn invoke(&self, prompt: &str) -> Result<String, AdapterError> {
-        call_with_retry(|| self.invoke_once(prompt), &self.retry)
+    fn invoke(&self, prompt: &str) -> Result<String, LanguageModelError> {
+        call_with_retry(|| self.invoke_once(prompt), &self.retry).map_err(Into::into)
     }
 }
 
@@ -560,8 +557,8 @@ impl GeminiAdapter {
 }
 
 impl LanguageModel for GeminiAdapter {
-    fn invoke(&self, prompt: &str) -> Result<String, AdapterError> {
-        let mut last_error = None;
+    fn invoke(&self, prompt: &str) -> Result<String, LanguageModelError> {
+        let mut last_error: Option<AdapterError> = None;
 
         for attempt in 0..self.retry.max_retries {
             match self.invoke_once(prompt) {
@@ -581,13 +578,16 @@ impl LanguageModel for GeminiAdapter {
                             continue;
                         }
                     }
-                    return Err(err);
+                    return Err(LanguageModelError::from(err));
                 }
             }
         }
 
         let err = last_error.unwrap_or(AdapterError::EmptyResponse);
-        Err(AdapterError::retry_exhausted(self.retry.max_retries, err))
+        Err(LanguageModelError::from(AdapterError::retry_exhausted(
+            self.retry.max_retries,
+            err,
+        )))
     }
 }
 
