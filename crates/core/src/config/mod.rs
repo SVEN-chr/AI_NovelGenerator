@@ -128,6 +128,14 @@ pub struct RecentUsage {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct PromptConfig {
+    #[serde(default)]
+    pub custom_directories: Vec<PathBuf>,
+    #[serde(default)]
+    pub enable_hot_reload: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     #[serde(default)]
     pub llm_profiles: BTreeMap<String, LlmConfig>,
@@ -137,6 +145,8 @@ pub struct Config {
     pub novel: NovelConfig,
     #[serde(default)]
     pub recent: RecentUsage,
+    #[serde(default)]
+    pub prompts: PromptConfig,
 }
 
 impl Config {
