@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+}
+
+.card {
+  @apply rounded-2xl border border-muted bg-card shadow-lg;
+}
+
+.section-title {
+  @apply text-xl font-semibold;
+}
